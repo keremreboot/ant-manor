@@ -2,7 +2,9 @@
 
 A phone-portrait 2D browser prototype: the Swarm Siege mechanic in a dollhouse cutaway.
 
-Tap a room to throw a glass ball of ants. The view starts zoomed in on the ground floor: drag to look around, pinch or scroll to zoom. It shatters against the back wall and the ants drop to the nearest floor, then crawl along floors, up walls, across ceilings, over furniture and up the stairs and ladders. A swarm eats any food at or below its size, every bite flies to the colony, and the colony hatches new ants into the next ball. Swarms that meet merge, and a swarm with nothing in reach slowly widens its search. Ants only live about 20 seconds once they land. Eat the red objectives before the clock runs out.
+Tap a room to throw a glass ball of ants. It shatters against the back wall and the ants drop to the nearest floor, then crawl along floors, up walls, across ceilings, over furniture and up the stairs and ladders. A swarm eats any food at or below its size, every bite flies to the colony, and the colony hatches new ants into the next ball. Swarms that meet merge, and a swarm with nothing in reach slowly widens its search. Ants only live about 20 seconds once they land. Eat the red objectives before the clock runs out.
+
+The view starts zoomed in on the ground floor. Drag to look around; pinch or scroll to zoom out to the whole house.
 
 - **Level 1, Tea Party (noon):** Pie (10 ants), Cake (22)
 - **Level 2, Sweet Shop (sunset):** Sundae (14), Macaron tower (22), Gingerbread house (30)
