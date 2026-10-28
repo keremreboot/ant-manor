@@ -232,7 +232,7 @@ body { height: 100%; margin: 0; background: var(--page); color: var(--page-ink);
         </div>
         <div class="colony-label">Colony</div>
       </div>
-      <div id="hint" class="hint"><span id="hintMain">Tap a room to throw your ant</span><small>Ants crawl the walls and eat what their swarm can handle</small></div>
+      <div id="hint" class="hint"><span id="hintMain">Tap a room to throw your ant</span><small>Drag to look around, pinch or scroll to zoom</small></div>
     </div>
     <div id="result" class="result" hidden>
       <div id="resultCard" class="result-card">
@@ -430,9 +430,44 @@ const $ = (id) => document.getElementById(id);
 const gameEl = $('game');
 const cv = $('cv');
 const ctx = cv.getContext('2d');
-let viewW = 1, viewH = 1, dpr = 1, sc = 1, ox = 0, oy = 0, S = 1;
+// sc: CSS px per unit for the screen-fixed layer (ball, crumbs), fitted to a 390 x 845 phone.
+// The house is drawn through a camera: vs = sc * zoom CSS px per world unit, K the same in device px.
+let viewW = 1, viewH = 1, dpr = 1, sc = 1, vs = 1, K = 1;
 let staticCv = null; let antAtlas = null; let AP = 16;
-const toWorld = (cx, cy) => { const r = cv.getBoundingClientRect(); return { x: (cx - r.left - ox) / sc, y: (cy - r.top - oy) / sc }; };
+
+// ================= camera =================
+// Zoomed in on the house: drag to look around, pinch or scroll to zoom. The timer row above and the
+// launcher below cover part of the screen, so the camera frames the house in the band between them.
+const HUD_TOP = 102, HUD_BOTTOM = 150;
+const cam = { x: 195, y: 500, z: 1, zMin: 0.8, zMax: 2.4 };
+const usableH = () => Math.max(100, viewH - HUD_TOP - HUD_BOTTOM);
+const usableCY = () => HUD_TOP + usableH() / 2;
+const w2s = (wx, wy) => ({ x: (wx - cam.x) * vs + viewW / 2, y: (wy - cam.y) * vs + usableCY() });
+const s2w = (sx, sy) => ({ x: (sx - viewW / 2) / vs + cam.x, y: (sy - usableCY()) / vs + cam.y });
+const w2u = (wx, wy) => { const p = w2s(wx, wy); return { x: p.x / sc, y: p.y / sc }; };
+function camLimits(z = cam.z) {
+  const b = LV.bounds, v = sc * z, uw = viewW / v, uh = usableH() / v;
+  const mx = (b.x0 + b.x1) / 2, my = (b.y0 + b.y1) / 2;
+  return {
+    x: b.x1 - b.x0 <= uw ? [mx, mx] : [b.x0 + uw / 2, b.x1 - uw / 2],
+    y: b.y1 - b.y0 <= uh ? [my, my] : [b.y0 + uh / 2, b.y1 - uh / 2],
+  };
+}
+function clampCam() { const L = camLimits(); cam.x = clamp(cam.x, L.x[0], L.x[1]); cam.y = clamp(cam.y, L.y[0], L.y[1]); }
+function resetCamera() {
+  const b = LV.bounds, fit = Math.min(viewW / ((b.x1 - b.x0) * sc), usableH() / ((b.y1 - b.y0) * sc));
+  cam.zMin = Math.min(1, fit); cam.zMax = 2.4;
+  cam.z = clamp(1.32 * viewW / ((b.x1 - b.x0) * sc), cam.zMin, cam.zMax); vs = sc * cam.z;
+  const L = camLimits(); cam.x = (L.x[0] + L.x[1]) / 2; cam.y = L.y[1]; // open on the ground floor, where the first throw goes
+}
+let rerenderT = 0;
+function setZoom(z, ax, ay) {
+  // keep the world point under (ax, ay) where it is on screen
+  const before = s2w(ax, ay); cam.z = clamp(z, cam.zMin, cam.zMax); vs = sc * cam.z;
+  const after = s2w(ax, ay); cam.x += before.x - after.x; cam.y += before.y - after.y; clampCam();
+  rerenderT = 0.18; // redraw the art sharp at the new size once the zoom settles
+}
+function rerenderAll() { K = dpr * vs; buildAntAtlas(); renderStatic(); for (const o of objects) renderFoodSprite(o); }
 
 // ================= room papers =================
 const PAPER = {
@@ -538,9 +573,10 @@ function drawRoom(c, r) {
 // lamp: how much the lamps carry the room (0 at noon, 1 at night); tint: what the house is multiplied by
 const MOOD = {
   // wallDim multiplies the rooms' back walls only, so the field sits at a calm mid value under light food and dark ants
-  day:   { lamp: 0, wallDim: 'rgb(228,224,234)', foodLift: 0, wall: ['#b5cdd3', '#a3bec6'], stripe: 'rgba(255,255,255,0.12)', rail: '#e8f0ee', skirt: ['#f4f1ea', '#dcd6cc'], floor: ['#cfa57a', '#bb8d5f'], board: 'rgba(120,80,50,0.35)', sheen: 'rgba(255,248,230,0.25)', tint: null, bg: '#a9c1c8', shadow: 'rgba(40,50,70,0.22)', vign: 'rgba(40,30,50,0.22)' },
-  dusk:  { lamp: 0.55, wallDim: 'rgb(226,214,218)', foodLift: 0.12, wall: ['#e2b3a3', '#cf9a8c'], stripe: 'rgba(255,240,232,0.1)', rail: '#efd2c6', skirt: ['#f5e2d8', '#d9bcae'], floor: ['#c48d68', '#a06a4c'], board: 'rgba(100,50,40,0.35)', sheen: 'rgba(255,214,170,0.22)', tint: 'rgba(250,224,212,1)', bg: '#d6a091', shadow: 'rgba(80,30,40,0.25)', vign: 'rgba(70,26,36,0.32)' },
-  night: { lamp: 1, wallDim: 'rgb(200,196,222)', foodLift: 0.22, wall: ['#2c3657', '#3a4569'], stripe: 'rgba(255,255,255,0.035)', rail: '#4a5378', skirt: ['#4d5272', '#3a3f5c'], floor: ['#5b4560', '#4a3850'], board: 'rgba(30,20,40,0.45)', sheen: 'rgba(255,220,160,0.06)', tint: 'rgba(184,190,232,1)', bg: '#2c3657', shadow: 'rgba(10,12,30,0.35)', vign: 'rgba(10,8,24,0.45)' },
+  // the nursery behind sits a clear step darker than the house in every mood, so the house reads as the lit object
+  day:   { lamp: 0, wallDim: 'rgb(228,224,234)', foodLift: 0, wall: ['#7b9cac', '#67889a'], stripe: 'rgba(255,255,255,0.06)', rail: '#9cb7c3', skirt: ['#c1cfd3', '#9daeb3'], floor: ['#9a6f4c', '#7e573a'], board: 'rgba(60,35,20,0.38)', sheen: 'rgba(255,240,215,0.14)', tint: null, bg: '#6f8f9f', shadow: 'rgba(18,28,46,0.45)', vign: 'rgba(18,22,38,0.36)' },
+  dusk:  { lamp: 0.55, wallDim: 'rgb(226,214,218)', foodLift: 0.12, wall: ['#ad776e', '#96635c'], stripe: 'rgba(255,230,220,0.07)', rail: '#c5988c', skirt: ['#d6b2a6', '#b58b7f'], floor: ['#915e3e', '#774a30'], board: 'rgba(60,25,20,0.4)', sheen: 'rgba(255,200,150,0.14)', tint: 'rgba(250,224,212,1)', bg: '#a06b62', shadow: 'rgba(58,18,28,0.45)', vign: 'rgba(58,18,28,0.42)' },
+  night: { lamp: 1, wallDim: 'rgb(200,196,222)', foodLift: 0.22, wall: ['#202843', '#2a3352'], stripe: 'rgba(255,255,255,0.03)', rail: '#3e4668', skirt: ['#40456a', '#30344f'], floor: ['#4a3850', '#3a2c42'], board: 'rgba(20,12,30,0.5)', sheen: 'rgba(255,220,160,0.05)', tint: 'rgba(184,190,232,1)', bg: '#202843', shadow: 'rgba(4,5,16,0.55)', vign: 'rgba(6,5,18,0.52)' },
 };
 const lampOf = (mood, r0, r1, k0, k1) => { const t = MOOD[mood].lamp; return { r: lerp(r0, r1, t), k: lerp(k0, k1, t) }; };
 
@@ -940,6 +976,8 @@ function shell(sp) {
   const chimney = chx ? [[chx, innerY(chx) - T + 5], [chx, chTop], [chx + 18, chTop], [chx + 18, innerY(chx + 18) - T + 5]] : null;
   if (chimney) solidPoly(chimney);
   B.outline = [[x0 - 8, GROUND_Y], [x0 - 8, ground], [xe0, innerY(xe0)], [xe0, innerY(xe0) - T], [WW / 2, innerY(WW / 2) - T], [xe1, innerY(xe1) - T], [xe1, innerY(xe1)], [x1 + 8, ground], [x1 + 8, GROUND_Y]];
+  // what the camera must be able to reach: eaves to eaves, chimney top to the floor under the plinth
+  B.bounds = { x0: xe0 - 6, x1: xe1 + 6, y0: Math.min(innerY(WW / 2) - T, chimney ? chTop - 4 : Infinity) - 10, y1: GROUND_Y + 10 };
 
   paint(0, (c) => {
     // slab holes show the stairwell: the upper room's paper, darkening down into the opening
@@ -1581,7 +1619,7 @@ function buildLevelData(L) {
     const i = gy * GW + gx, sx = gx * CS + 1, sy = gy * CS + 1;
     if (occ[i] === 0 && pp[(sy * WW + sx) * 4 + 3] > 127) occ[i] = -3;
   }
-  return { rooms: B.rooms.slice(), paint: B.paint.map((a) => a.slice()), lights: B.lights, foods: B.foods.slice(), solids: B.solids.slice(), outline: B.outline };
+  return { rooms: B.rooms.slice(), paint: B.paint.map((a) => a.slice()), lights: B.lights, foods: B.foods.slice(), solids: B.solids.slice(), outline: B.outline, bounds: B.bounds };
 }
 const maskCache = {};
 function foodMask(kind) {
@@ -1636,20 +1674,28 @@ function fieldOf(o) {
 }
 
 // ================= rendering: static layer =================
+let staticExt = { x0: 0, y0: 0, z: 1 };
 function renderStatic() {
-  if (!LV) return;
-  const W = cv.width, H = cv.height;
+  if (!LV || viewW < 2) return;
+  // paint everything the camera can show at this zoom, once; panning then only moves the picture
+  const L = camLimits(), hw = viewW / 2 / vs;
+  const wx0 = L.x[0] - hw - 4, wx1 = L.x[1] + hw + 4, wy0 = L.y[0] - usableCY() / vs - 4, wy1 = L.y[1] + (viewH - usableCY()) / vs + 4;
+  let k = K; const area = (wx1 - wx0) * (wy1 - wy0) * k * k;
+  if (area > 9e6) k *= Math.sqrt(9e6 / area); // stay inside phone memory at extreme zoom
+  const W = Math.ceil((wx1 - wx0) * k), H = Math.ceil((wy1 - wy0) * k);
   staticCv = staticCv || document.createElement('canvas'); staticCv.width = W; staticCv.height = H;
+  staticExt = { x0: wx0, y0: wy0, z: cam.z, k };
   const c = staticCv.getContext('2d');
-  const wx0 = -ox / sc, wy0 = -oy / sc, wx1 = (viewW - ox) / sc, wy1 = (viewH - oy) / sc;
-  // the nursery is painted at a third of the resolution and scaled up, so it reads soft and far away
-  const lo = document.createElement('canvas'); lo.width = Math.max(1, Math.ceil(W / 4)); lo.height = Math.max(1, Math.ceil(H / 4));
-  const lc = lo.getContext('2d'); lc.setTransform(S / 4, 0, 0, S / 4, ox * dpr / 4, oy * dpr / 4);
+  // the nursery is painted at a fifth of the resolution and scaled up, so it reads soft and far away
+  const lo = document.createElement('canvas'); lo.width = Math.max(1, Math.ceil(W / 5)); lo.height = Math.max(1, Math.ceil(H / 5));
+  const lc = lo.getContext('2d'); lc.setTransform(k / 5, 0, 0, k / 5, -wx0 * k / 5, -wy0 * k / 5);
   drawBackdrop(lc, LV.mood, wx0, wy0, wx1, wy1);
-  lc.fillStyle = MOOD[LV.mood].shadow; lc.save(); lc.translate(10, 6); houseSilhouette(lc); lc.restore();
+  // a deep soft shadow lifts the house off the wall behind it
+  lc.fillStyle = MOOD[LV.mood].shadow; lc.save(); lc.translate(16, 11); houseSilhouette(lc); lc.restore();
+  lc.fillStyle = MOOD[LV.mood].shadow; lc.save(); lc.translate(6, 4); lc.globalAlpha = 0.6; houseSilhouette(lc); lc.restore();
   c.imageSmoothingEnabled = true; c.imageSmoothingQuality = 'high';
   c.drawImage(lo, 0, 0, W, H);
-  c.setTransform(S, 0, 0, S, ox * dpr, oy * dpr);
+  c.setTransform(k, 0, 0, k, -wx0 * k, -wy0 * k);
   // floor shadow under the plinth
   c.save(); c.translate(WW / 2 + 6, GROUND_Y + 2); c.scale(200, 14); c.fillStyle = radial(c, 0, 0, 1, [[0, 'rgba(40,24,30,0.45)'], [0.7, 'rgba(40,24,30,0.2)'], [1, 'rgba(40,24,30,0)']]); c.beginPath(); c.arc(0, 0, 1, 0, TAU); c.fill(); c.restore();
   LV.lights.length = 0; // decor registers its lamps again as it paints
@@ -1674,12 +1720,8 @@ function renderStatic() {
     for (const l of LV.lights) { c.fillStyle = radial(c, l.x, l.y, l.r * 0.8, [[0, `rgba(255,200,130,${l.k * 0.35})`], [1, 'rgba(255,200,130,0)']]); c.beginPath(); c.arc(l.x, l.y, l.r, 0, TAU); c.fill(); }
     c.restore();
   }
-  // vignette
-  c.setTransform(1, 0, 0, 1, 0, 0);
-  const vg = c.createRadialGradient(W / 2, H * 0.45, Math.min(W, H) * 0.45, W / 2, H * 0.5, Math.max(W, H) * 0.75);
-  vg.addColorStop(0, 'rgba(30,20,40,0)'); vg.addColorStop(1, MOOD[LV.mood].vign);
-  c.fillStyle = vg; c.fillRect(0, 0, W, H);
 }
+// the launcher lives in the screen layer (units of sc CSS px), pinned to the bottom of the screen
 const BALL_HOME = { x: 195, y: 772 }, BALL_R = 21;
 function drawThimble(c, kick) {
   const x = BALL_HOME.x, y = BALL_HOME.y + BALL_R - 2, sq = 1 - kick * 0.18, wd = 1 + kick * 0.08;
@@ -1726,7 +1768,7 @@ function paintAnt(c, ph, age, dead, ang) {
   c.fillStyle = rgba(hl, 0.9); ell(c, -2.4 + lx * 1.0, ly * 0.9, 1.1, 0.6); c.fill(); ell(c, 2.65 + lx * 0.5, ly * 0.55, 0.5, 0.38); c.fill();
 }
 function buildAntAtlas() {
-  AP = Math.max(8, Math.ceil(AB * S));
+  AP = Math.max(8, Math.ceil(AB * K));
   antAtlas = antAtlas || document.createElement('canvas');
   antAtlas.width = AP * ANGLES; antAtlas.height = AP * (AGES * FRAMES + AGES);
   const c = antAtlas.getContext('2d'); c.clearRect(0, 0, antAtlas.width, antAtlas.height);
@@ -1748,8 +1790,8 @@ function drawAnt(x, y, ang, ph, age, dead = false, scale = 1) {
 function renderFoodSprite(o) {
   const d = FOOD[o.kind], W = d.w + 8, H = d.h + 8;
   const cvs = o.spr || document.createElement('canvas');
-  cvs.width = Math.ceil(W * S); cvs.height = Math.ceil(H * S);
-  const c = cvs.getContext('2d'); c.setTransform(S, 0, 0, S, W / 2 * S, (H - 2) * S);
+  cvs.width = Math.ceil(W * K); cvs.height = Math.ceil(H * K);
+  const c = cvs.getContext('2d'); c.setTransform(K, 0, 0, K, W / 2 * K, (H - 2) * K);
   FOOD_ART[o.kind](c);
   o.spr = cvs; o.sprW = W; o.sprH = H; o.drawnBites = 0; applyBites(o, true);
 }
@@ -2095,25 +2137,59 @@ function resetGame(idx = levelIdx) {
   gameEl.style.background = MOOD[L.mood].bg;
   $('levelChip').textContent = `LEVEL ${levelIdx + 1}`; $('hintMain').textContent = L.hint;
   $('hint').hidden = false; $('result').hidden = true;
-  if (S > 0) { renderStatic(); for (const o of objects) renderFoodSprite(o); }
+  if (viewW > 1) { resetCamera(); rerenderAll(); }
   buildGoalsUI(); syncLevelPick(); hud.secs = -1; hud.count = -1; hud.dropT = 0;
 }
 
 // ================= input =================
-let hover = null, downAt = null;
+// a short still touch throws; a drag pans the camera; two fingers (or the mouse wheel) zoom
+let hover = null, gesture = null;
+const pointers = new Map();
 function tapPoint(e) {
-  const p = toWorld(e.clientX, e.clientY);
-  if (p.y > GROUND_Y - 4 || p.x < 2 || p.x > WW - 2 || p.y < 60) return null;
+  const r = cv.getBoundingClientRect(), sx = e.clientX - r.left, sy = e.clientY - r.top;
+  if (sy > viewH - 112) return null; // the launcher and colony strip
+  const p = s2w(sx, sy);
+  if (p.y > GROUND_Y - 4 || p.x < 2 || p.x > WW - 2 || p.y < 30) return null;
   return p;
 }
-cv.addEventListener('pointerdown', (e) => { ensureAudio(); downAt = { x: e.clientX, y: e.clientY, t: performance.now() }; });
-cv.addEventListener('pointerup', (e) => {
-  if (!downAt) return;
-  const moved = Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y); const held = performance.now() - downAt.t; downAt = null;
-  if (moved < 16 && held < 700) { const p = tapPoint(e); if (p) fire(p.x, p.y); }
+cv.addEventListener('pointerdown', (e) => {
+  ensureAudio();
+  try { cv.setPointerCapture(e.pointerId); } catch (err) { /* not supported */ }
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pointers.size === 1) gesture = { type: 'tap', x0: e.clientX, y0: e.clientY, t: performance.now(), cx: cam.x, cy: cam.y };
+  else if (pointers.size === 2) {
+    const [a, b] = [...pointers.values()];
+    gesture = { type: 'pinch', d0: Math.hypot(a.x - b.x, a.y - b.y), z0: cam.z, mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 };
+  }
 });
-cv.addEventListener('pointermove', (e) => { hover = e.pointerType === 'mouse' ? tapPoint(e) : null; });
+cv.addEventListener('pointermove', (e) => {
+  if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (gesture && gesture.type === 'pinch' && pointers.size >= 2) {
+    const [a, b] = [...pointers.values()], r = cv.getBoundingClientRect();
+    const d = Math.hypot(a.x - b.x, a.y - b.y), mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+    setZoom(gesture.z0 * d / Math.max(20, gesture.d0), mx - r.left, my - r.top);
+    cam.x -= (mx - gesture.mx) / vs; cam.y -= (my - gesture.my) / vs; gesture.mx = mx; gesture.my = my; clampCam();
+  } else if (gesture && pointers.size === 1 && gesture.type !== 'pinch') {
+    const dx = e.clientX - gesture.x0, dy = e.clientY - gesture.y0;
+    if (gesture.type === 'tap' && Math.hypot(dx, dy) > 10) gesture.type = 'pan';
+    if (gesture.type === 'pan') { cam.x = gesture.cx - dx / vs; cam.y = gesture.cy - dy / vs; clampCam(); }
+  }
+  hover = e.pointerType === 'mouse' && (!gesture || gesture.type === 'tap') ? tapPoint(e) : null;
+});
+function endPointer(e) {
+  if (!pointers.has(e.pointerId)) return;
+  pointers.delete(e.pointerId);
+  if (gesture && gesture.type === 'tap' && e.type === 'pointerup' && performance.now() - gesture.t < 700) { const p = tapPoint(e); if (p) fire(p.x, p.y); }
+  if (!pointers.size) gesture = null;
+  else if (gesture && gesture.type === 'pinch') { const [a] = [...pointers.values()]; gesture = { type: 'pan', x0: a.x, y0: a.y, cx: cam.x, cy: cam.y }; }
+}
+cv.addEventListener('pointerup', endPointer);
+cv.addEventListener('pointercancel', endPointer);
 cv.addEventListener('pointerleave', () => { hover = null; });
+cv.addEventListener('wheel', (e) => {
+  e.preventDefault(); const r = cv.getBoundingClientRect();
+  setZoom(cam.z * Math.exp(-e.deltaY * 0.0015), e.clientX - r.left, e.clientY - r.top);
+}, { passive: false });
 window.addEventListener('keydown', (e) => { if ((e.key === 'r' || e.key === 'R') && !e.target.closest('input')) resetGame(); });
 
 function fire(x, y) {
@@ -2129,28 +2205,28 @@ function fire(x, y) {
       const d = dx * dx + dy * dy; if (d < bd) { bd = d; tx = gx * CS + 1.5; ty = gy * CS + 1.5; }
     }
   }
+  // the ball flies in the screen layer from the thimble to wherever the target is on screen now
   b.state = 'flying'; b.t = 0; b.from = { x: b.x, y: b.y }; b.to = { x: tx, y: ty };
-  const d = Math.hypot(tx - b.x, ty - b.y); b.dur = 0.4 + d * 0.0011; b.arc = 30 + d * 0.16;
+  const end = w2u(tx, ty), d = Math.hypot(end.x - b.x, end.y - b.y); b.dur = 0.4 + d * 0.0011; b.arc = 30 + d * 0.16;
   readyBall = spawnBall(); launcherKick = 1; G.shots++;
   parts.push({ kind: 'ring', shrink: true, x: tx, y: ty, vx: 0, vy: 0, life: 0, max: b.dur, size: 14, col: 'rgba(255,255,255,0.9)' });
   if (G.state === 'ready') { G.state = 'play'; $('hint').hidden = true; }
   SFX.launch();
 }
 function impact(b) {
-  const s = newSwarm(b.x, b.y);
+  const P = b.to, s = newSwarm(P.x, P.y);
   const lifespan = CFG.life >= 61 ? Infinity : CFG.life;
   for (const a of b.ants) {
     a.life = a.maxLife = lifespan * (0.8 + rand() * 0.4);
-    const sc2 = b.r / BALL_R;
-    a.x = b.x + a.lx * sc2 * 0.7 + (rand() - 0.5) * 3; a.y = b.y + a.ly * sc2 * 0.7 + (rand() - 0.5) * 3;
-    if (blocks(occ[cellAt(a.x, a.y)])) { a.x = b.x; a.y = b.y; }
+    a.x = P.x + a.lx * 0.36 + (rand() - 0.5) * 3; a.y = P.y + a.ly * 0.36 + (rand() - 0.5) * 3;
+    if (blocks(occ[cellAt(a.x, a.y)])) { a.x = P.x; a.y = P.y; }
     a.mode = 'fall'; a.ball = null; a.hidden = false;
     a.vx = (rand() - 0.5) * 70; a.vy = -(30 + rand() * 80);
     a.swarm = s; s.ants.push(a);
   }
   b.ants.length = 0; balls.splice(balls.indexOf(b), 1);
-  for (let k = 0; k < 22; k++) parts.push({ kind: 'shard', x: b.x, y: b.y, vx: (rand() - 0.5) * 220, vy: -40 - rand() * 160, life: 0, max: 0.7 + rand() * 0.4, size: 1.6 + rand() * 2, rot: rand() * 6 });
-  parts.push({ kind: 'ring', x: b.x, y: b.y, vx: 0, vy: 0, life: 0, max: 0.35, size: 26, col: 'rgba(255,255,255,0.95)' });
+  for (let k = 0; k < 22; k++) parts.push({ kind: 'shard', x: P.x, y: P.y, vx: (rand() - 0.5) * 220, vy: -40 - rand() * 160, life: 0, max: 0.7 + rand() * 0.4, size: 1.6 + rand() * 2, rot: rand() * 6 });
+  parts.push({ kind: 'ring', x: P.x, y: P.y, vx: 0, vy: 0, life: 0, max: 0.35, size: 26, col: 'rgba(255,255,255,0.95)' });
   G.shake = Math.max(G.shake, 0.3);
   SFX.shatter();
 }
@@ -2161,10 +2237,10 @@ function updateBalls(dt) {
       b.appear = Math.min(1, b.appear + dt * 4); b.deny = Math.max(0, b.deny - dt);
       b.x = BALL_HOME.x + Math.sin(b.deny * 50) * b.deny * 6; b.y = BALL_HOME.y + Math.sin(clock * 2.2) * 0.8; b.r = BALL_R * Math.max(0.01, b.appear < 1 ? b.appear * (1 + Math.sin(b.appear * Math.PI) * 0.18) : 1);
     } else {
-      b.t += dt / b.dur; const t = Math.min(1, b.t), e = t;
-      b.x = lerp(b.from.x, b.to.x, e); b.y = lerp(b.from.y, b.to.y, e) - b.arc * 4 * t * (1 - t);
-      b.r = BALL_R * lerp(1, 0.52, t); b.rot += dt * 9;
-      if (b.t >= 1) { b.x = b.to.x; b.y = b.to.y; impact(b); continue; }
+      b.t += dt / b.dur; const t = Math.min(1, b.t), end = w2u(b.to.x, b.to.y);
+      b.x = lerp(b.from.x, end.x, t); b.y = lerp(b.from.y, end.y, t) - b.arc * 4 * t * (1 - t);
+      b.r = BALL_R * lerp(1, 0.52 * cam.z, t); b.rot += dt * 9;
+      if (b.t >= 1) { impact(b); continue; }
     }
     b.ants.forEach((a, i) => {
       a.hidden = i >= BALL_VISIBLE; if (a.hidden) return;
@@ -2178,11 +2254,6 @@ function updateBalls(dt) {
 function drawBall(b) {
   const r = b.r; if (r < 0.5) return;
   ctx.save(); ctx.translate(b.x, b.y);
-  if (b.state === 'flying') {
-    // its shadow grows on the wall where it will hit
-    const t = Math.min(1, b.t); ctx.save(); ctx.translate(b.to.x - b.x, b.to.y - b.y);
-    ctx.fillStyle = `rgba(40,24,40,${0.1 + 0.2 * t})`; ell(ctx, 0, 0, 8 + 6 * (1 - t), 4 + 4 * (1 - t)); ctx.fill(); ctx.restore();
-  }
   ctx.fillStyle = radial(ctx, -r * 0.3, -r * 0.35, r * 1.1, [[0, 'rgba(235,250,255,0.10)'], [0.75, 'rgba(190,225,245,0.22)'], [1, 'rgba(150,200,230,0.42)']]);
   ctx.beginPath(); ctx.arc(0, 0, r, 0, TAU); ctx.fill();
   ctx.save(); ctx.beginPath(); ctx.arc(0, 0, r * 0.94, 0, TAU); ctx.clip();
@@ -2203,9 +2274,9 @@ function drawBall(b) {
 let colonyPos = { x: 52, y: 790 };
 function spawnCrumb(o, v) {
   if (crumbs.length > 240) { G.colonyFood += v; checkHatch(); return; }
-  const x0 = o.x + (rand() - 0.5) * o.w * 0.7, y0 = o.y - rand() * o.h * 0.8;
-  const midX = (x0 + colonyPos.x) / 2 + (rand() - 0.5) * 120, midY = Math.min(y0, colonyPos.y) - 60 - rand() * 90;
-  crumbs.push({ x0, y0, cx: midX, cy: midY, t: 0, dur: 0.6 + rand() * 0.3, v, col: o.col, rot: rand() * 6, size: 3.5 + Math.min(4, v * 3) });
+  // starts on the food in the house, flies through the screen layer to the colony dial
+  const wx = o.x + (rand() - 0.5) * o.w * 0.7, wy = o.y - rand() * o.h * 0.8;
+  crumbs.push({ wx, wy, offX: (rand() - 0.5) * 120, lift: 60 + rand() * 90, t: 0, dur: 0.6 + rand() * 0.3, v, col: o.col, rot: rand() * 6, size: 3.5 + Math.min(4, v * 3) });
 }
 function checkHatch() {
   if (G.state === 'won' || G.state === 'lost') return;
@@ -2221,7 +2292,7 @@ function updateFeed(dt) {
     flyers.push({ t: 0, dur: 0.5, k: G.pendingHatch, x0: colonyPos.x, y0: colonyPos.y - 6 });
     const tag = G.hatchTag && floaters.includes(G.hatchTag) && G.hatchTag.t < 0.6 ? G.hatchTag : null;
     if (tag) { tag.n += G.pendingHatch; tag.text = `+${tag.n}`; tag.t = 0.15; }
-    else { G.hatchTag = { x: colonyPos.x + 30, y: colonyPos.y - 44, n: G.pendingHatch, text: `+${G.pendingHatch}`, t: 0, dur: 0.9, color: COL.honey, size: 19 }; floaters.push(G.hatchTag); }
+    else { G.hatchTag = { ui: true, x: colonyPos.x + 30, y: colonyPos.y - 44, n: G.pendingHatch, text: `+${G.pendingHatch}`, t: 0, dur: 0.9, color: COL.honey, size: 19 }; floaters.push(G.hatchTag); }
     G.pendingHatch = 0; G.flyerCd = 0.08; colonyPop();
   }
   for (let i = flyers.length - 1; i >= 0; i--) {
@@ -2276,18 +2347,62 @@ function textPill(cx, cy, text, bg, fg, size = 15) {
   pillPath(cx - w / 2, cy - h / 2, w, h); ctx.fillStyle = bg; ctx.fill();
   ctx.fillStyle = fg; ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'center'; ctx.fillText(text, cx, cy + size * 0.36); ctx.textAlign = 'left';
 }
-function drawOverlay() {
-  const live = G.state === 'ready' || G.state === 'play';
-  let fieldMax = 0; for (const s of swarms) fieldMax = Math.max(fieldMax, s.ants.length);
-  const ballN = readyBall ? readyBall.ants.length : 0; const reach = Math.max(fieldMax, ballN);
+function drawFloaters(ui) {
+  for (const f of floaters) {
+    if (!!f.ui !== ui) continue;
+    const a = f.t < 0.7 ? 1 : 1 - (f.t - 0.7) / 0.3;
+    ctx.globalAlpha = a; ctx.font = `900 ${f.size}px ${DISPLAY}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.lineWidth = 3.6; ctx.strokeStyle = 'rgba(42,26,23,0.85)'; const y = f.y - f.t * 30; ctx.lineJoin = 'round';
+    ctx.strokeText(f.text, f.x, y); ctx.fillStyle = f.color; ctx.fillText(f.text, f.x, y);
+    ctx.textAlign = 'left'; ctx.globalAlpha = 1;
+  }
+}
+// the screen layer: thimble and ball, the next-ball count, aim line, crumbs and new ants on their way
+function drawUI() {
+  const live = G.state === 'ready' || G.state === 'play', ballN = readyBall ? readyBall.ants.length : 0;
   if (hover && readyBall && live && ballN) {
-    const fx = BALL_HOME.x, fy = BALL_HOME.y, d = Math.hypot(hover.x - fx, hover.y - fy), arc = 30 + d * 0.16;
+    const fx = BALL_HOME.x, fy = BALL_HOME.y, h = w2u(hover.x, hover.y), d = Math.hypot(h.x - fx, h.y - fy), arc = 30 + d * 0.16;
     for (let i = 2; i < 20; i++) {
-      const t = i / 20; const x = lerp(fx, hover.x, t), y = lerp(fy, hover.y, t) - arc * 4 * t * (1 - t);
+      const t = i / 20; const x = lerp(fx, h.x, t), y = lerp(fy, h.y, t) - arc * 4 * t * (1 - t);
       ctx.beginPath(); ctx.arc(x, y, 2.6 * (1 - t * 0.4), 0, TAU); ctx.fillStyle = `rgba(255,255,255,${0.9 - t * 0.4})`; ctx.fill();
       ctx.lineWidth = 0.8; ctx.strokeStyle = 'rgba(42,26,23,0.35)'; ctx.stroke();
     }
-    ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.beginPath(); ctx.arc(hover.x, hover.y, 7 + Math.sin(clock * 6) * 0.6, 0, TAU); ctx.stroke();
+    ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.beginPath(); ctx.arc(h.x, h.y, 7 + Math.sin(clock * 6) * 0.6, 0, TAU); ctx.stroke();
+  }
+  drawThimble(ctx, launcherKick);
+  for (const b of balls) drawBall(b);
+  if (readyBall && readyBall.appear > 0.3) {
+    const x = BALL_HOME.x + BALL_R + 44, y = BALL_HOME.y;
+    if (ballN > 0) countPill(x, y, '', ballN, { bg: COL.honey, fg: COL.ink, size: 27 });
+    else textPill(x + 14, y, readyBall.deny > 0 ? 'Wait for ants' : 'Hatching…', readyBall.deny > 0 ? COL.signal : COL.ink70, COL.cream, 15);
+  }
+  for (const c of crumbs) {
+    const p = w2u(c.wx, c.wy), cx = (p.x + colonyPos.x) / 2 + c.offX, cy = Math.min(p.y, colonyPos.y) - c.lift;
+    const t = c.t * c.t * (3 - 2 * c.t); const u = 1 - t;
+    const x = u * u * p.x + 2 * u * t * cx + t * t * colonyPos.x, y = u * u * p.y + 2 * u * t * cy + t * t * colonyPos.y;
+    const s = c.size * (1 - t * 0.45) * lerp(cam.z, 1, t);
+    ctx.save(); ctx.translate(x, y); ctx.rotate(c.rot + c.t * 8);
+    rr(ctx, -s / 2, -s / 2, s, s, 1.3); ctx.fillStyle = c.col; ctx.fill(); ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(42,26,23,0.55)'; ctx.stroke();
+    ctx.restore();
+  }
+  if (readyBall) {
+    for (const f of flyers) {
+      const t = 1 - Math.pow(1 - f.t, 2); const x = f.x0 + (BALL_HOME.x - f.x0) * t, y = f.y0 + (BALL_HOME.y - f.y0) * t - Math.sin(t * Math.PI) * 50;
+      ctx.beginPath(); ctx.arc(x, y, 10, 0, TAU); ctx.fillStyle = COL.cream; ctx.fill(); ctx.lineWidth = 1.8; ctx.strokeStyle = COL.honey; ctx.stroke();
+      antIcon(x, y, 14, COL.ink);
+      if (f.k > 1) { ctx.font = `800 11px ${DISPLAY}`; ctx.fillStyle = COL.ink; ctx.textBaseline = 'middle'; ctx.fillText(`×${f.k}`, x + 12, y - 9); }
+    }
+  }
+  drawFloaters(true);
+}
+// the house layer: tap hint, size gates, swarm counts, objective labels, the ball's shadow on the wall
+function drawOverlay() {
+  let fieldMax = 0; for (const s of swarms) fieldMax = Math.max(fieldMax, s.ants.length);
+  const ballN = readyBall ? readyBall.ants.length : 0; const reach = Math.max(fieldMax, ballN);
+  for (const b of balls) {
+    if (b.state !== 'flying') continue;
+    const t = Math.min(1, b.t);
+    ctx.fillStyle = `rgba(40,24,40,${0.1 + 0.2 * t})`; ell(ctx, b.to.x, b.to.y, 8 + 6 * (1 - t), 4 + 4 * (1 - t)); ctx.fill();
   }
   if (G.state === 'ready') {
     const p = LEVELS[levelIdx].tap; const k = (clock * 1.2) % 1;
@@ -2328,34 +2443,7 @@ function drawOverlay() {
     const o = gp.o, bob = Math.sin(clock * 3 + o.x) * 1.4;
     countPill(o.x, gp.y + bob, o.objective.toUpperCase(), o.need, { bg: COL.signal, fg: COL.cream, size: 15, ring: reach >= o.need ? `rgba(255,248,238,${0.6 + 0.4 * Math.sin(clock * 8)})` : null, pointer: true });
   }
-  if (readyBall && readyBall.appear > 0.3) {
-    const n = readyBall.ants.length, x = BALL_HOME.x + BALL_R + 44, y = BALL_HOME.y;
-    if (n > 0) countPill(x, y, '', n, { bg: COL.honey, fg: COL.ink, size: 27 });
-    else textPill(x + 14, y, readyBall.deny > 0 ? 'Wait for ants' : 'Hatching…', readyBall.deny > 0 ? COL.signal : COL.ink70, COL.cream, 15);
-  }
-  for (const c of crumbs) {
-    const t = c.t * c.t * (3 - 2 * c.t); const u = 1 - t;
-    const x = u * u * c.x0 + 2 * u * t * c.cx + t * t * colonyPos.x, y = u * u * c.y0 + 2 * u * t * c.cy + t * t * colonyPos.y;
-    const s = c.size * (1 - t * 0.45);
-    ctx.save(); ctx.translate(x, y); ctx.rotate(c.rot + c.t * 8);
-    rr(ctx, -s / 2, -s / 2, s, s, 1.3); ctx.fillStyle = c.col; ctx.fill(); ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(42,26,23,0.55)'; ctx.stroke();
-    ctx.restore();
-  }
-  if (readyBall) {
-    for (const f of flyers) {
-      const t = 1 - Math.pow(1 - f.t, 2); const x = f.x0 + (BALL_HOME.x - f.x0) * t, y = f.y0 + (BALL_HOME.y - f.y0) * t - Math.sin(t * Math.PI) * 50;
-      ctx.beginPath(); ctx.arc(x, y, 10, 0, TAU); ctx.fillStyle = COL.cream; ctx.fill(); ctx.lineWidth = 1.8; ctx.strokeStyle = COL.honey; ctx.stroke();
-      antIcon(x, y, 14, COL.ink);
-      if (f.k > 1) { ctx.font = `800 11px ${DISPLAY}`; ctx.fillStyle = COL.ink; ctx.textBaseline = 'middle'; ctx.fillText(`×${f.k}`, x + 12, y - 9); }
-    }
-  }
-  for (const f of floaters) {
-    const a = f.t < 0.7 ? 1 : 1 - (f.t - 0.7) / 0.3;
-    ctx.globalAlpha = a; ctx.font = `900 ${f.size}px ${DISPLAY}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.lineWidth = 3.6; ctx.strokeStyle = 'rgba(42,26,23,0.85)'; const y = f.y - f.t * 30; ctx.lineJoin = 'round';
-    ctx.strokeText(f.text, f.x, y); ctx.fillStyle = f.color; ctx.fillText(f.text, f.x, y);
-    ctx.textAlign = 'left'; ctx.globalAlpha = 1;
-  }
+  drawFloaters(false);
 }
 
 // ================= frame =================
@@ -2363,10 +2451,13 @@ let debugGrid = false;
 function draw() {
   if (!staticCv || !antAtlas) return;
   const k = REDUCED_MOTION ? 0 : G.shake * G.shake * 6;
-  const shx = (rand() - 0.5) * k * dpr * sc, shy = (rand() - 0.5) * k * dpr * sc;
+  const shx = (rand() - 0.5) * k * dpr * vs, shy = (rand() - 0.5) * k * dpr * vs;
   ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, cv.width, cv.height);
-  ctx.drawImage(staticCv, shx, shy);
-  ctx.setTransform(S, 0, 0, S, ox * dpr + shx, oy * dpr + shy);
+  // the painted house, placed by the camera (scaled while a zoom is settling)
+  const o0 = w2s(staticExt.x0, staticExt.y0), f = dpr * vs / staticExt.k;
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(staticCv, o0.x * dpr + shx, o0.y * dpr + shy, staticCv.width * f, staticCv.height * f);
+  ctx.setTransform(dpr * vs, 0, 0, dpr * vs, dpr * (viewW / 2 - cam.x * vs) + shx, dpr * (usableCY() - cam.y * vs) + shy);
   if (debugGrid) { ctx.fillStyle = 'rgba(255,0,120,0.35)'; for (let i = 0; i < N; i++) if (cling[i]) ctx.fillRect(cxOf(i) - 0.6, cyOf(i) - 0.6, 1.2, 1.2); }
   // the fireplace keeps burning
   for (const l of LV.lights) {
@@ -2413,9 +2504,14 @@ function draw() {
     else drawAnt(a.x + a.ox, a.y + a.oy, a.ang, a.ph, age);
   }
   drawParts();
-  drawThimble(ctx, launcherKick);
-  for (const b of balls) drawBall(b);
   drawOverlay();
+  // screen-fixed: a vignette, then the launcher layer
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  const W = cv.width, H = cv.height, vg = ctx.createRadialGradient(W / 2, H * 0.45, Math.min(W, H) * 0.42, W / 2, H * 0.5, Math.max(W, H) * 0.75);
+  vg.addColorStop(0, 'rgba(30,20,40,0)'); vg.addColorStop(1, MOOD[LV.mood].vign);
+  ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
+  ctx.setTransform(dpr * sc, 0, 0, dpr * sc, 0, 0);
+  drawUI();
 }
 
 // ================= HUD =================
@@ -2522,11 +2618,13 @@ function resize() {
   const w = gameEl.clientWidth, h = gameEl.clientHeight; if (!w || !h) return;
   dpr = Math.min(window.devicePixelRatio || 1, 2); viewW = w; viewH = h;
   cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
-  // fit the 390 x 845 world, letting the backdrop run past it on other shapes
-  sc = Math.min(w / WW, h / WH); ox = (w - WW * sc) / 2; oy = (h - WH * sc) / 2; S = sc * dpr;
+  // the screen layer is sized as if fitting a 390 x 845 phone; the launcher sits 73 of those units off the bottom
+  sc = Math.min(w / WW, h / WH);
+  BALL_HOME.x = w / sc / 2; BALL_HOME.y = h / sc - 73;
   const r = document.querySelector('.colony-dial').getBoundingClientRect(), g = cv.getBoundingClientRect();
-  colonyPos = { x: (r.left - g.left + r.width / 2 - ox) / sc, y: (r.top - g.top + r.height / 2 - oy) / sc };
-  buildAntAtlas(); renderStatic(); for (const o of objects) renderFoodSprite(o);
+  colonyPos = { x: (r.left - g.left + r.width / 2) / sc, y: (r.top - g.top + r.height / 2) / sc };
+  if (LV) resetCamera();
+  rerenderAll();
 }
 new ResizeObserver(resize).observe(gameEl);
 
@@ -2548,6 +2646,7 @@ function tick(now) {
   requestAnimationFrame(tick);
   const dt = clamp((now - lastT) / 1000, 0, 0.05); lastT = now;
   G.shake = Math.max(0, G.shake - dt * 1.4);
+  if (rerenderT > 0) { rerenderT -= dt; if (rerenderT <= 0) rerenderAll(); }
   if (!paused) step(dt);
   draw(); updateHUD();
 }
