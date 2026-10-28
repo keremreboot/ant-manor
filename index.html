@@ -232,7 +232,7 @@ body { height: 100%; margin: 0; background: var(--page); color: var(--page-ink);
         </div>
         <div class="colony-label">Colony</div>
       </div>
-      <div id="hint" class="hint"><span id="hintMain">Tap a room to throw your ant</span><small>Drag to look around, pinch or scroll to zoom</small></div>
+      <div id="hint" class="hint"><span id="hintMain">Tap a room to throw your ant</span><small>Ants crawl the walls and eat what their swarm can handle</small></div>
     </div>
     <div id="result" class="result" hidden>
       <div id="resultCard" class="result-card">
@@ -431,41 +431,24 @@ const gameEl = $('game');
 const cv = $('cv');
 const ctx = cv.getContext('2d');
 // sc: CSS px per unit for the screen-fixed layer (ball, crumbs), fitted to a 390 x 845 phone.
-// The house is drawn through a camera: vs = sc * zoom CSS px per world unit, K the same in device px.
+// The house is framed to fill the screen: vs CSS px per world unit, K the same in device px.
 let viewW = 1, viewH = 1, dpr = 1, sc = 1, vs = 1, K = 1;
 let staticCv = null; let antAtlas = null; let AP = 16;
 
-// ================= camera =================
-// Zoomed in on the house: drag to look around, pinch or scroll to zoom. The timer row above and the
-// launcher below cover part of the screen, so the camera frames the house in the band between them.
-const HUD_TOP = 102, HUD_BOTTOM = 150;
-const cam = { x: 195, y: 500, z: 1, zMin: 0.8, zMax: 2.4 };
+// ================= framing =================
+// Each house is fitted as large as it can be between the timer row above and the launcher below,
+// wall to wall: the eaves and plinth ends may run off the sides so the rooms get the whole width.
+const HUD_TOP = 100, HUD_BOTTOM = 112;
+const cam = { x: 195, y: 500 };
 const usableH = () => Math.max(100, viewH - HUD_TOP - HUD_BOTTOM);
 const usableCY = () => HUD_TOP + usableH() / 2;
 const w2s = (wx, wy) => ({ x: (wx - cam.x) * vs + viewW / 2, y: (wy - cam.y) * vs + usableCY() });
 const s2w = (sx, sy) => ({ x: (sx - viewW / 2) / vs + cam.x, y: (sy - usableCY()) / vs + cam.y });
 const w2u = (wx, wy) => { const p = w2s(wx, wy); return { x: p.x / sc, y: p.y / sc }; };
-function camLimits(z = cam.z) {
-  const b = LV.bounds, v = sc * z, uw = viewW / v, uh = usableH() / v;
-  const mx = (b.x0 + b.x1) / 2, my = (b.y0 + b.y1) / 2;
-  return {
-    x: b.x1 - b.x0 <= uw ? [mx, mx] : [b.x0 + uw / 2, b.x1 - uw / 2],
-    y: b.y1 - b.y0 <= uh ? [my, my] : [b.y0 + uh / 2, b.y1 - uh / 2],
-  };
-}
-function clampCam() { const L = camLimits(); cam.x = clamp(cam.x, L.x[0], L.x[1]); cam.y = clamp(cam.y, L.y[0], L.y[1]); }
-function resetCamera() {
-  const b = LV.bounds, fit = Math.min(viewW / ((b.x1 - b.x0) * sc), usableH() / ((b.y1 - b.y0) * sc));
-  cam.zMin = Math.min(1, fit); cam.zMax = 2.4;
-  cam.z = clamp(1.32 * viewW / ((b.x1 - b.x0) * sc), cam.zMin, cam.zMax); vs = sc * cam.z;
-  const L = camLimits(); cam.x = (L.x[0] + L.x[1]) / 2; cam.y = L.y[1]; // open on the ground floor, where the first throw goes
-}
-let rerenderT = 0;
-function setZoom(z, ax, ay) {
-  // keep the world point under (ax, ay) where it is on screen
-  const before = s2w(ax, ay); cam.z = clamp(z, cam.zMin, cam.zMax); vs = sc * cam.z;
-  const after = s2w(ax, ay); cam.x += before.x - after.x; cam.y += before.y - after.y; clampCam();
-  rerenderT = 0.18; // redraw the art sharp at the new size once the zoom settles
+function frameHouse() {
+  const b = LV.bounds;
+  vs = Math.min(viewW / (b.x1 - b.x0), usableH() / (b.y1 - b.y0));
+  cam.x = (b.x0 + b.x1) / 2; cam.y = (b.y0 + b.y1) / 2;
 }
 function rerenderAll() { K = dpr * vs; buildAntAtlas(); renderStatic(); for (const o of objects) renderFoodSprite(o); }
 
@@ -976,8 +959,8 @@ function shell(sp) {
   const chimney = chx ? [[chx, innerY(chx) - T + 5], [chx, chTop], [chx + 18, chTop], [chx + 18, innerY(chx + 18) - T + 5]] : null;
   if (chimney) solidPoly(chimney);
   B.outline = [[x0 - 8, GROUND_Y], [x0 - 8, ground], [xe0, innerY(xe0)], [xe0, innerY(xe0) - T], [WW / 2, innerY(WW / 2) - T], [xe1, innerY(xe1) - T], [xe1, innerY(xe1)], [x1 + 8, ground], [x1 + 8, GROUND_Y]];
-  // what the camera must be able to reach: eaves to eaves, chimney top to the floor under the plinth
-  B.bounds = { x0: xe0 - 6, x1: xe1 + 6, y0: Math.min(innerY(WW / 2) - T, chimney ? chTop - 4 : Infinity) - 10, y1: GROUND_Y + 10 };
+  // what the framing keeps on screen: the outer walls side to side, the roof ridge down to the plinth
+  B.bounds = { x0: x0 - 3, x1: x1 + 3, y0: Math.min(innerY(WW / 2) - T, chimney ? chTop - 4 : Infinity) - 6, y1: GROUND_Y + 2 };
 
   paint(0, (c) => {
     // slab holes show the stairwell: the upper room's paper, darkening down into the opening
@@ -1108,7 +1091,8 @@ const FOOD = {
   tower:     { need: 22, food: 28, w: 28, h: 44, col: '#c9e4f0', objective: 'Macarons' },
   ginger:    { need: 30, food: 38, w: 44, h: 44, col: '#b9733a', objective: 'Gingerbread' },
 };
-// each painter draws with its origin at the bottom centre, standing on y = 0
+// each painter draws with its origin at the bottom centre, standing on y = 0; FS scales every food in the house
+const FS = 1.2;
 const FOOD_ART = {
   sugar(c) {
     block(c, -3.6, -6.4, 7.2, 6.4, '#f4f1ec', { r: 0.6, band: 1.4, hl: 0.5 });
@@ -1419,7 +1403,7 @@ function buildCottage() {
 function buildTownhouse() {
   const mood = 'night';
   const H = shell({
-    x0: 20, x1: 370, ground: 690, floors: [118, 118, 118], slab: 14, slope: 0.92, mood,
+    x0: 20, x1: 370, ground: 690, floors: [118, 118, 118], slab: 14, slope: 0.75, mood,
     ext: '#cfe0ef', roof: '#4f6fa8', plinth: '#5b3a5e', chimney: 280,
     rooms: [[[32, 214, PAPER.sage], [222, 358, PAPER.teal]], [[32, 250, PAPER.peach], [258, 358, PAPER.blush]], [[32, 170, PAPER.lilac], [178, 358, PAPER.lemon]]],
     attic: PAPER.attic, holes: [[0, 32, 116], [1, 274, 358], [2, 112, 134]], windows: [['L', 1, 488, 524], ['L', 0, 596, 630], ['R', 2, 330, 366]],
@@ -1624,9 +1608,9 @@ function buildLevelData(L) {
 const maskCache = {};
 function foodMask(kind) {
   if (maskCache[kind]) return maskCache[kind];
-  const d = FOOD[kind], W = Math.ceil(d.w + 8), H = Math.ceil(d.h + 8);
+  const d = FOOD[kind], W = Math.ceil(d.w * FS + 8), H = Math.ceil(d.h * FS + 8);
   const m = document.createElement('canvas'); m.width = W; m.height = H; const c = m.getContext('2d');
-  c.translate(W / 2, H - 2); FOOD_ART[kind](c);
+  c.translate(W / 2, H - 2); c.scale(FS, FS); FOOD_ART[kind](c);
   const a = c.getImageData(0, 0, W, H).data; const alpha = new Uint8Array(W * H);
   for (let i = 0; i < W * H; i++) alpha[i] = a[i * 4 + 3];
   return (maskCache[kind] = { W, H, alpha, ox: W / 2, oy: H - 2 });
@@ -1635,15 +1619,15 @@ function spawnFood(kind, x, yFrom) {
   const d = FOOD[kind], mk = foodMask(kind);
   // drop the food onto the first solid surface under it
   // (a start point inside a surface climbs up onto it instead)
-  const half = Math.max(1, d.w / 2 - 2);
+  const half = Math.max(1, d.w * FS / 2 - 2);
   const rowHit = (gy) => { for (let x0 = x - half; x0 <= x + half; x0 += 1.5) if (occ[gy * GW + clamp(Math.floor(x0 / CS), 0, GW - 1)] === -1) return true; return false; };
   let gy = Math.floor(yFrom / CS);
   if (rowHit(gy)) { while (gy > 1 && rowHit(gy - 1)) gy--; } else { while (gy < GH - 1 && !rowHit(gy)) gy++; }
   const y = gy * CS;
   const o = {
-    id: objects.length + 1, kind, x, y, w: d.w, h: d.h, need: d.need <= 1 ? 1 : Math.max(2, Math.round(d.need * CFG.needScale)),
+    id: objects.length + 1, kind, x, y, w: d.w * FS, h: d.h * FS, need: d.need <= 1 ? 1 : Math.max(2, Math.round(d.need * CFG.needScale)),
     maxHp: d.food, hp: d.food, alive: true, objective: d.objective || null, col: d.col, cells: [], under: [], field: null, fieldVer: 0,
-    pending: 0, crumbT: 0, eatT: 0, eaters: 0, seated: 0, bites: [], biteIdx: 0, spr: null, cx: x, cy: y - d.h / 2, rad: Math.max(d.w, d.h) / 2,
+    pending: 0, crumbT: 0, eatT: 0, eaters: 0, seated: 0, bites: [], biteIdx: 0, spr: null, cx: x, cy: y - d.h * FS / 2, rad: Math.max(d.w, d.h) * FS / 2,
   };
   // collision from the drawing's own alpha
   const gx0 = Math.floor((x - mk.ox) / CS), gx1 = Math.floor((x - mk.ox + mk.W) / CS), gy0 = Math.floor((y - mk.oy) / CS), gy1 = Math.floor((y - mk.oy + mk.H) / CS);
@@ -1674,17 +1658,15 @@ function fieldOf(o) {
 }
 
 // ================= rendering: static layer =================
-let staticExt = { x0: 0, y0: 0, z: 1 };
+let staticExt = { x0: 0, y0: 0, k: 1 };
 function renderStatic() {
   if (!LV || viewW < 2) return;
-  // paint everything the camera can show at this zoom, once; panning then only moves the picture
-  const L = camLimits(), hw = viewW / 2 / vs;
-  const wx0 = L.x[0] - hw - 4, wx1 = L.x[1] + hw + 4, wy0 = L.y[0] - usableCY() / vs - 4, wy1 = L.y[1] + (viewH - usableCY()) / vs + 4;
-  let k = K; const area = (wx1 - wx0) * (wy1 - wy0) * k * k;
-  if (area > 9e6) k *= Math.sqrt(9e6 / area); // stay inside phone memory at extreme zoom
+  // the whole screen's worth of house and nursery, painted once
+  const a = s2w(0, 0), b = s2w(viewW, viewH), k = K;
+  const wx0 = a.x - 2, wy0 = a.y - 2, wx1 = b.x + 2, wy1 = b.y + 2;
   const W = Math.ceil((wx1 - wx0) * k), H = Math.ceil((wy1 - wy0) * k);
   staticCv = staticCv || document.createElement('canvas'); staticCv.width = W; staticCv.height = H;
-  staticExt = { x0: wx0, y0: wy0, z: cam.z, k };
+  staticExt = { x0: wx0, y0: wy0, k };
   const c = staticCv.getContext('2d');
   // the nursery is painted at a fifth of the resolution and scaled up, so it reads soft and far away
   const lo = document.createElement('canvas'); lo.width = Math.max(1, Math.ceil(W / 5)); lo.height = Math.max(1, Math.ceil(H / 5));
@@ -1736,7 +1718,8 @@ function drawThimble(c, kick) {
 }
 
 // ================= ant sprites =================
-const ANGLES = 32, FRAMES = 3, AGES = 3, AB = 12; // AB: world size of one sprite box
+const ANGLES = 32, FRAMES = 3, AGES = 3, AB = 16; // AB: world size of one sprite box
+const ANT_SCALE = 1.3; // ants are drawn larger than the crawl grid so they read on a phone
 function paintAnt(c, ph, age, dead, ang) {
   const body = mix('#2c1611', '#a09484', age * 0.6), leg = mix('#1f0f0b', '#8d8274', age * 0.6), hl = tint(body, 0.38);
   c.lineCap = 'round';
@@ -1774,7 +1757,7 @@ function buildAntAtlas() {
   const c = antAtlas.getContext('2d'); c.clearRect(0, 0, antAtlas.width, antAtlas.height);
   for (let ag = 0; ag < AGES; ag++) for (let fr = 0; fr <= FRAMES; fr++) for (let k = 0; k < ANGLES; k++) {
     const row = fr === FRAMES ? AGES * FRAMES + ag : ag * FRAMES + fr; const ang = k / ANGLES * TAU;
-    c.setTransform(1, 0, 0, 1, 0, 0); c.translate(k * AP + AP / 2, row * AP + AP / 2); c.scale(AP / AB, AP / AB); c.rotate(ang);
+    c.setTransform(1, 0, 0, 1, 0, 0); c.translate(k * AP + AP / 2, row * AP + AP / 2); c.scale(AP / AB * ANT_SCALE, AP / AB * ANT_SCALE); c.rotate(ang);
     paintAnt(c, fr / FRAMES * TAU, ag / (AGES - 1), fr === FRAMES, ang);
   }
 }
@@ -1788,11 +1771,11 @@ function drawAnt(x, y, ang, ph, age, dead = false, scale = 1) {
 
 // ================= food sprites =================
 function renderFoodSprite(o) {
-  const d = FOOD[o.kind], W = d.w + 8, H = d.h + 8;
+  const d = FOOD[o.kind], W = d.w * FS + 8, H = d.h * FS + 8;
   const cvs = o.spr || document.createElement('canvas');
   cvs.width = Math.ceil(W * K); cvs.height = Math.ceil(H * K);
   const c = cvs.getContext('2d'); c.setTransform(K, 0, 0, K, W / 2 * K, (H - 2) * K);
-  FOOD_ART[o.kind](c);
+  c.save(); c.scale(FS, FS); FOOD_ART[o.kind](c); c.restore();
   o.spr = cvs; o.sprW = W; o.sprH = H; o.drawnBites = 0; applyBites(o, true);
 }
 function applyBites(o, quiet) {
@@ -1800,8 +1783,8 @@ function applyBites(o, quiet) {
   if (target <= o.drawnBites) return;
   const c = o.spr.getContext('2d'); c.save(); c.globalCompositeOperation = 'destination-out';
   for (let i = o.drawnBites; i < target; i++) {
-    const b = o.bites[i]; c.beginPath(); c.arc(b.x, b.y, 2.3, 0, TAU); c.fill();
-    c.beginPath(); c.arc(b.x + 1.6 * Math.cos(i), b.y + 1.6 * Math.sin(i * 1.7), 1.4, 0, TAU); c.fill();
+    const b = o.bites[i]; c.beginPath(); c.arc(b.x, b.y, 2.3 * FS, 0, TAU); c.fill();
+    c.beginPath(); c.arc(b.x + 1.9 * Math.cos(i), b.y + 1.9 * Math.sin(i * 1.7), 1.6, 0, TAU); c.fill();
     if (!quiet && i - o.drawnBites < 2) spawnBit(o.x + b.x, o.y + b.y, o.col);
   }
   c.restore(); o.drawnBites = target; o.biteIdx = target;
@@ -1959,7 +1942,8 @@ function updateAnts(dt, live) {
     a.ph += dt * 26;
     // each ant keeps its own lane off the surface, so a trail is a band of ants rather than one line
     const lk = Math.min(1, dt * 6), onRibbon = a.mode === 'walk' && a.cell >= 0;
-    a.ox += ((onRibbon ? nrmX[a.cell] * a.lane : 0) - a.ox) * lk; a.oy += ((onRibbon ? nrmY[a.cell] * a.lane : 0) - a.oy) * lk;
+    // (plus a little extra so the bigger drawn body stands on the surface rather than in it)
+    a.ox += ((onRibbon ? nrmX[a.cell] * (a.lane + 1.3) : 0) - a.ox) * lk; a.oy += ((onRibbon ? nrmY[a.cell] * (a.lane + 1.3) : 0) - a.oy) * lk;
     if (a.mode === 'fall') { stepFall(a, dt, false); continue; }
     const s = a.swarm; const sp = CFG.antSpeed * a.spd * (1 - 0.35 * ageOf(a));
     if (a.mode === 'eat') {
@@ -2137,59 +2121,27 @@ function resetGame(idx = levelIdx) {
   gameEl.style.background = MOOD[L.mood].bg;
   $('levelChip').textContent = `LEVEL ${levelIdx + 1}`; $('hintMain').textContent = L.hint;
   $('hint').hidden = false; $('result').hidden = true;
-  if (viewW > 1) { resetCamera(); rerenderAll(); }
+  if (viewW > 1) { frameHouse(); rerenderAll(); }
   buildGoalsUI(); syncLevelPick(); hud.secs = -1; hud.count = -1; hud.dropT = 0;
 }
 
 // ================= input =================
-// a short still touch throws; a drag pans the camera; two fingers (or the mouse wheel) zoom
-let hover = null, gesture = null;
-const pointers = new Map();
+let hover = null, downAt = null;
 function tapPoint(e) {
   const r = cv.getBoundingClientRect(), sx = e.clientX - r.left, sy = e.clientY - r.top;
-  if (sy > viewH - 112) return null; // the launcher and colony strip
+  if (sy > viewH - 100) return null; // the launcher and colony strip
   const p = s2w(sx, sy);
   if (p.y > GROUND_Y - 4 || p.x < 2 || p.x > WW - 2 || p.y < 30) return null;
   return p;
 }
-cv.addEventListener('pointerdown', (e) => {
-  ensureAudio();
-  try { cv.setPointerCapture(e.pointerId); } catch (err) { /* not supported */ }
-  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  if (pointers.size === 1) gesture = { type: 'tap', x0: e.clientX, y0: e.clientY, t: performance.now(), cx: cam.x, cy: cam.y };
-  else if (pointers.size === 2) {
-    const [a, b] = [...pointers.values()];
-    gesture = { type: 'pinch', d0: Math.hypot(a.x - b.x, a.y - b.y), z0: cam.z, mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 };
-  }
+cv.addEventListener('pointerdown', (e) => { ensureAudio(); downAt = { x: e.clientX, y: e.clientY, t: performance.now() }; });
+cv.addEventListener('pointerup', (e) => {
+  if (!downAt) return;
+  const moved = Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y); const held = performance.now() - downAt.t; downAt = null;
+  if (moved < 16 && held < 700) { const p = tapPoint(e); if (p) fire(p.x, p.y); }
 });
-cv.addEventListener('pointermove', (e) => {
-  if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  if (gesture && gesture.type === 'pinch' && pointers.size >= 2) {
-    const [a, b] = [...pointers.values()], r = cv.getBoundingClientRect();
-    const d = Math.hypot(a.x - b.x, a.y - b.y), mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
-    setZoom(gesture.z0 * d / Math.max(20, gesture.d0), mx - r.left, my - r.top);
-    cam.x -= (mx - gesture.mx) / vs; cam.y -= (my - gesture.my) / vs; gesture.mx = mx; gesture.my = my; clampCam();
-  } else if (gesture && pointers.size === 1 && gesture.type !== 'pinch') {
-    const dx = e.clientX - gesture.x0, dy = e.clientY - gesture.y0;
-    if (gesture.type === 'tap' && Math.hypot(dx, dy) > 10) gesture.type = 'pan';
-    if (gesture.type === 'pan') { cam.x = gesture.cx - dx / vs; cam.y = gesture.cy - dy / vs; clampCam(); }
-  }
-  hover = e.pointerType === 'mouse' && (!gesture || gesture.type === 'tap') ? tapPoint(e) : null;
-});
-function endPointer(e) {
-  if (!pointers.has(e.pointerId)) return;
-  pointers.delete(e.pointerId);
-  if (gesture && gesture.type === 'tap' && e.type === 'pointerup' && performance.now() - gesture.t < 700) { const p = tapPoint(e); if (p) fire(p.x, p.y); }
-  if (!pointers.size) gesture = null;
-  else if (gesture && gesture.type === 'pinch') { const [a] = [...pointers.values()]; gesture = { type: 'pan', x0: a.x, y0: a.y, cx: cam.x, cy: cam.y }; }
-}
-cv.addEventListener('pointerup', endPointer);
-cv.addEventListener('pointercancel', endPointer);
+cv.addEventListener('pointermove', (e) => { hover = e.pointerType === 'mouse' ? tapPoint(e) : null; });
 cv.addEventListener('pointerleave', () => { hover = null; });
-cv.addEventListener('wheel', (e) => {
-  e.preventDefault(); const r = cv.getBoundingClientRect();
-  setZoom(cam.z * Math.exp(-e.deltaY * 0.0015), e.clientX - r.left, e.clientY - r.top);
-}, { passive: false });
 window.addEventListener('keydown', (e) => { if ((e.key === 'r' || e.key === 'R') && !e.target.closest('input')) resetGame(); });
 
 function fire(x, y) {
@@ -2239,7 +2191,7 @@ function updateBalls(dt) {
     } else {
       b.t += dt / b.dur; const t = Math.min(1, b.t), end = w2u(b.to.x, b.to.y);
       b.x = lerp(b.from.x, end.x, t); b.y = lerp(b.from.y, end.y, t) - b.arc * 4 * t * (1 - t);
-      b.r = BALL_R * lerp(1, 0.52 * cam.z, t); b.rot += dt * 9;
+      b.r = BALL_R * lerp(1, 0.52 * vs / sc, t); b.rot += dt * 9;
       if (b.t >= 1) { impact(b); continue; }
     }
     b.ants.forEach((a, i) => {
@@ -2258,7 +2210,7 @@ function drawBall(b) {
   ctx.beginPath(); ctx.arc(0, 0, r, 0, TAU); ctx.fill();
   ctx.save(); ctx.beginPath(); ctx.arc(0, 0, r * 0.94, 0, TAU); ctx.clip();
   const k = r / BALL_R; ctx.rotate(b.state === 'flying' ? b.rot : 0);
-  for (const a of b.ants) { if (a.hidden) continue; drawAnt(a.lx * k, a.ly * k, a.ang, a.ph, 0, false, 0.85 * k); }
+  for (const a of b.ants) { if (a.hidden) continue; drawAnt(a.lx * k, a.ly * k, a.ang, a.ph, 0, false, 0.62 * k); }
   ctx.restore();
   ctx.lineWidth = Math.max(0.8, r * 0.09); ctx.strokeStyle = 'rgba(255,255,255,0.55)'; ctx.beginPath(); ctx.arc(0, 0, r - ctx.lineWidth / 2, 0, TAU); ctx.stroke();
   ctx.strokeStyle = 'rgba(110,160,190,0.55)'; ctx.lineWidth = Math.max(0.6, r * 0.05); ctx.beginPath(); ctx.arc(0, 0, r - 0.3, 0.1 * Math.PI, 0.9 * Math.PI); ctx.stroke();
@@ -2380,7 +2332,7 @@ function drawUI() {
     const p = w2u(c.wx, c.wy), cx = (p.x + colonyPos.x) / 2 + c.offX, cy = Math.min(p.y, colonyPos.y) - c.lift;
     const t = c.t * c.t * (3 - 2 * c.t); const u = 1 - t;
     const x = u * u * p.x + 2 * u * t * cx + t * t * colonyPos.x, y = u * u * p.y + 2 * u * t * cy + t * t * colonyPos.y;
-    const s = c.size * (1 - t * 0.45) * lerp(cam.z, 1, t);
+    const s = c.size * (1 - t * 0.45) * lerp(vs / sc, 1, t);
     ctx.save(); ctx.translate(x, y); ctx.rotate(c.rot + c.t * 8);
     rr(ctx, -s / 2, -s / 2, s, s, 1.3); ctx.fillStyle = c.col; ctx.fill(); ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(42,26,23,0.55)'; ctx.stroke();
     ctx.restore();
@@ -2415,25 +2367,25 @@ function drawOverlay() {
   const gates = [];
   for (const o of objects) {
     if (!o.alive || o.objective || o.need < 2 || eatenBy.has(o)) continue;
-    gates.push({ o, x: o.x, y: o.y - o.h - 9, w: pillSize('', o.need, 13).w });
+    gates.push({ o, x: o.x, y: o.y - o.h - 10, w: pillSize('', o.need, 15).w });
   }
   gates.sort((a, b) => b.y - a.y);
-  gates.forEach((g, i) => { for (let j = 0; j < i; j++) { const q = gates[j]; if (Math.abs(g.x - q.x) < (g.w + q.w) / 2 + 1 && Math.abs(g.y - q.y) < 20) g.y = q.y - 20; } });
+  gates.forEach((g, i) => { for (let j = 0; j < i; j++) { const q = gates[j]; if (Math.abs(g.x - q.x) < (g.w + q.w) / 2 + 1 && Math.abs(g.y - q.y) < 22) g.y = q.y - 22; } });
   for (const g of gates) {
     const ok = reach >= g.o.need;
-    countPill(g.x, g.y, '', g.o.need, ok ? { bg: '#d3f0dd', fg: '#1f4a33', size: 13, ring: 'rgba(31,74,51,0.45)' } : { bg: 'rgba(42,26,23,0.86)', fg: COL.cream, size: 13 });
+    countPill(g.x, g.y, '', g.o.need, ok ? { bg: '#d3f0dd', fg: '#1f4a33', size: 15, ring: 'rgba(31,74,51,0.45)' } : { bg: 'rgba(42,26,23,0.86)', fg: COL.cream, size: 15 });
   }
   // objective labels sit above their food; swarm counts go below it or above the swarm, never on the ants
-  const goalPills = objects.filter((o) => o.alive && o.objective).map((o) => ({ o, x: o.x, y: o.y - o.h - 17, w: pillSize(o.objective.toUpperCase(), o.need, 15).w }));
+  const goalPills = objects.filter((o) => o.alive && o.objective).map((o) => ({ o, x: o.x, y: o.y - o.h - 18, w: pillSize(o.objective.toUpperCase(), o.need, 16).w }));
   for (const s of swarms) {
     const o = s.target && s.target.alive ? s.target : null; let px, py;
     const eating = o && s.ants.some((a) => a.mode === 'eat');
-    if (o && o.objective && (eating || Math.hypot(s.ax - o.x, s.ay - o.y) < 60)) { px = o.x; py = o.y + 15; }
-    else if (eating) { px = o.x; py = o.y - o.h - 13; }
-    else { px = s.ax; py = s.ay - 20; }
-    const size = (s.idle ? 14 : 15) + s.pulse * 4, sw = pillSize('', s.ants.length, size).w;
+    if (o && o.objective && (eating || Math.hypot(s.ax - o.x, s.ay - o.y) < 60)) { px = o.x; py = o.y + 16; }
+    else if (eating) { px = o.x; py = o.y - o.h - 14; }
+    else { px = s.ax; py = s.ay - 22; }
+    const size = (s.idle ? 16 : 17) + s.pulse * 4, sw = pillSize('', s.ants.length, size).w;
     // a count that would hit an objective's label moves under that food instead, where the label never is
-    for (const gp of goalPills) if (Math.abs(px - gp.x) < (sw + gp.w) / 2 + 4 && Math.abs(py - gp.y) < 28) { px = gp.o.x; py = gp.o.y + 15; }
+    for (const gp of goalPills) if (Math.abs(px - gp.x) < (sw + gp.w) / 2 + 4 && Math.abs(py - gp.y) < 30) { px = gp.o.x; py = gp.o.y + 16; }
     s.px = lerp(s.px, px, 0.2); s.py = lerp(s.py, py, 0.2);
     const bar = s.mortal ? s.lifeFrac : null;
     if (s.idle) countPill(s.px, s.py, '', s.ants.length, { bg: '#ddd3cf', fg: 'rgba(42,26,23,0.7)', size, ring: 'rgba(42,26,23,0.35)', bar });
@@ -2441,7 +2393,7 @@ function drawOverlay() {
   }
   for (const gp of goalPills) {
     const o = gp.o, bob = Math.sin(clock * 3 + o.x) * 1.4;
-    countPill(o.x, gp.y + bob, o.objective.toUpperCase(), o.need, { bg: COL.signal, fg: COL.cream, size: 15, ring: reach >= o.need ? `rgba(255,248,238,${0.6 + 0.4 * Math.sin(clock * 8)})` : null, pointer: true });
+    countPill(o.x, gp.y + bob, o.objective.toUpperCase(), o.need, { bg: COL.signal, fg: COL.cream, size: 16, ring: reach >= o.need ? `rgba(255,248,238,${0.6 + 0.4 * Math.sin(clock * 8)})` : null, pointer: true });
   }
   drawFloaters(false);
 }
@@ -2453,7 +2405,7 @@ function draw() {
   const k = REDUCED_MOTION ? 0 : G.shake * G.shake * 6;
   const shx = (rand() - 0.5) * k * dpr * vs, shy = (rand() - 0.5) * k * dpr * vs;
   ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, cv.width, cv.height);
-  // the painted house, placed by the camera (scaled while a zoom is settling)
+  // the painted house and nursery
   const o0 = w2s(staticExt.x0, staticExt.y0), f = dpr * vs / staticExt.k;
   ctx.imageSmoothingEnabled = true;
   ctx.drawImage(staticCv, o0.x * dpr + shx, o0.y * dpr + shy, staticCv.width * f, staticCv.height * f);
@@ -2485,10 +2437,10 @@ function draw() {
     ctx.restore();
     if (o.kind === 'cake' && left > 0.82) {
       for (const x of [-6, 0, 6]) {
-        const fl = 1 + Math.sin(clock * 17 + x) * 0.12;
-        ctx.fillStyle = 'rgba(255,190,90,0.35)'; ell(ctx, o.x + x, o.y - 45, 3.2 * fl, 4.2 * fl); ctx.fill();
-        ctx.fillStyle = '#ffcf5a'; ell(ctx, o.x + x, o.y - 45.5, 1.2, 2.4 * fl); ctx.fill();
-        ctx.fillStyle = '#fff6d0'; ell(ctx, o.x + x, o.y - 44.8, 0.6, 1.1); ctx.fill();
+        const fl = 1 + Math.sin(clock * 17 + x) * 0.12, fx = o.x + x * FS, fy = o.y - 45 * FS;
+        ctx.fillStyle = 'rgba(255,190,90,0.35)'; ell(ctx, fx, fy, 3.2 * FS * fl, 4.2 * FS * fl); ctx.fill();
+        ctx.fillStyle = '#ffcf5a'; ell(ctx, fx, fy - 0.5 * FS, 1.2 * FS, 2.4 * FS * fl); ctx.fill();
+        ctx.fillStyle = '#fff6d0'; ell(ctx, fx, fy + 0.2 * FS, 0.6 * FS, 1.1 * FS); ctx.fill();
       }
     }
   }
@@ -2623,7 +2575,7 @@ function resize() {
   BALL_HOME.x = w / sc / 2; BALL_HOME.y = h / sc - 73;
   const r = document.querySelector('.colony-dial').getBoundingClientRect(), g = cv.getBoundingClientRect();
   colonyPos = { x: (r.left - g.left + r.width / 2) / sc, y: (r.top - g.top + r.height / 2) / sc };
-  if (LV) resetCamera();
+  if (LV) frameHouse();
   rerenderAll();
 }
 new ResizeObserver(resize).observe(gameEl);
@@ -2646,7 +2598,6 @@ function tick(now) {
   requestAnimationFrame(tick);
   const dt = clamp((now - lastT) / 1000, 0, 0.05); lastT = now;
   G.shake = Math.max(0, G.shake - dt * 1.4);
-  if (rerenderT > 0) { rerenderT -= dt; if (rerenderT <= 0) rerenderAll(); }
   if (!paused) step(dt);
   draw(); updateHUD();
 }
